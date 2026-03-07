@@ -503,8 +503,8 @@ func (lc *LineClient) syncSingleChat(ctx context.Context, op line.Operation) {
 
 	// Use ChatInfoChange to only update avatar (and other non-name metadata).
 	// Name updates are handled by handleGroupRename from contentType=18 messages,
-	// which has the correct new name and proper sender attribution.
-	// We avoid setting a sender here to prevent ghost creation/invite issues.
+	// which has the correct new name from LOC_ARGS.
+	// No sender is set on either event to avoid ghost creation/invite issues.
 	lc.UserLogin.Bridge.QueueRemoteEvent(lc.UserLogin, &simplevent.ChatInfoChange{
 		EventMeta: simplevent.EventMeta{
 			Type:      bridgev2.RemoteEventChatInfoChange,

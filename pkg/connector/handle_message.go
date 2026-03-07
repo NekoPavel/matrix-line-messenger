@@ -557,7 +557,7 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 
 			// Skip empty/whitespace-only text messages (system messages that fell through)
 			if strings.TrimSpace(unwrappedText) == "" {
-				return nil, fmt.Errorf("empty text message, skipping")
+				return nil, nil
 			}
 
 			// Default to Text
