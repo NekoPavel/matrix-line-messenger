@@ -8,14 +8,28 @@ A Matrix bridge for LINE Messenger using mautrix-go.\
 Based on the [mautrix-twilio](https://github.com/mautrix/twilio) bridge
 
 > [!WARNING]
-> When updating from a version released before February 14, 2026, please make sure to reset your configuration and log in again.\
-> This is due to a change in the login flow that requires users to log in again to fetch the necessary keys for E2EE decryption.
+> When updating from a version released before February 14, 2026,
+> please make sure to reset your configuration and log in again.\
+> This is due to a change in the login flow that requires users to log
+> in again to fetch the necessary keys for E2EE decryption.
 
 ## Known issues
 
 > [!NOTE]
-> Messages sent to the LINE Bot using Beeper Desktop may appear as indefinitely sending.\
-> Use Beeper Mobile to send commands to the LINE Bot account after creating the chat with Beeper Desktop.
+> Messages sent to the LINE Bot using Beeper Desktop may appear as
+> indefinitely sending.\
+> Use Beeper Mobile to send commands to the LINE Bot account after
+> creating the chat with Beeper Desktop.
+
+> [!WARNING]
+> The bridge identifies itself as a LINE Chrome Extension client. LINE
+> only allows one active Chrome Extension session at a time, so you
+> cannot use the LINE Chrome Extension and the bridge simultaneously.
+> Logging into the LINE Chrome Extension will invalidate the bridge's
+> session (and vice versa). If this happens, you will need to
+> re-authenticate the bridge. If you want to use LINE Chrome, you will
+> need to log out of the bridge first as the bridge will try to automatically
+> log back in and invalidate the LINE Chrome session again.
 
 ## Features
 
@@ -30,143 +44,283 @@ Based on the [mautrix-twilio](https://github.com/mautrix/twilio) bridge
 - [x] Message unsending/deletion
 - [x] Leaving chats
 
-## How to Use
+## Setup
 
-1. Prerequisites:
+### 1. Clone the repository
 
-    - For Windows users: Install MSYS2 and gcc for mingw-w64
+```bash
+git clone https://github.com/highesttt/matrix-line-messenger.git
+cd matrix-line-messenger
+mkdir data
+```
 
-    ```bash
-    # Step 1: Make sure you have MSYS2 installed and gcc for mingw-w64
-    winget install MSYS2.MSYS2
-    # Open MSYS2 MinGW 64-bit terminal and install necessary packages
-    pacman -Syu mingw-w64-x86_64-gcc cmake
-    ```
+### 2. Choose your setup
 
-    Ensure you have [Docker](https://www.docker.com/get-started/) and [Docker Compose](https://docs.docker.com/compose/install/) installed on your system. OR if you want to build and run without Docker, ensure you have Go installed along with necessary build tools (like the olm library).
+---
 
-    - **For Beeper users**: Compile bbctl from source if you don't have it already:
+## Beeper users (Docker)
 
-    ```bash
-    git clone https://github.com/beeper/bridge-manager.git
-    cd bridge-manager
+### Beeper Docker prerequisites
 
-    # For windows users only:
-    # in cmd/bbctl/run.go, remove the following lines since msys2 is still seen as linux but Windows doesn't support Setpgid:
+- [Docker](https://www.docker.com/get-started/) and [Docker Compose](https://docs.docker.com/compose/install/)
+- [bbctl](https://github.com/beeper/bridge-manager) (compile from source if you don't have it):
 
-    # if runtime.GOOS == "linux" {
-    #     cmd.SysProcAttr = &syscall.SysProcAttr{
-    #         // Don't pass through signals to the bridge, we'll send a sigterm when we want to stop it.
-    #         // Causes weird issues on macOS, so limited to Linux.
-    #         Setpgid: true,
-    #     }
-    # }
+```bash
+git clone https://github.com/beeper/bridge-manager.git
+cd bridge-manager
+./build.sh
+```
 
-    ./build.sh
-    ```
+### Beeper Docker configuration
 
-2. Clone the repository:
+```bash
+bbctl c --type bridgev2 sh-line > data/config.yaml
+```
 
-    ```bash
-    git clone https://github.com/highesttt/matrix-line-messenger.git
-    cd matrix-line-messenger
-    ```
+The Docker container will automatically generate a matching
+`registration.yaml` from the Beeper-issued tokens in your config on
+first startup.
 
-3. Create a `data` directory for configuration and data storage:
+### Beeper Docker run
 
-    ```bash
-    mkdir data
-    ```
+```bash
+docker compose up --build -d
+```
 
-4. Create a configuration file:
+---
 
-    - **For Beeper users** (using [bbctl](https://github.com/beeper/bridge-manager)):
+## Self-hosted Matrix server (Docker)
 
-    ```bash
-    bbctl c --type bridgev2 sh-line > data/config.yaml
-    ```
+### Self-hosted Docker prerequisites
 
-    - **For self-hosted Matrix servers** (Synapse, Conduit, etc.):
+- [Docker](https://www.docker.com/get-started/) and [Docker Compose](https://docs.docker.com/compose/install/)
+- A Matrix homeserver (Synapse, Dendrite, Conduit, etc.)
 
-    First, build the bridge binary (see step 5), then generate the example config and registration:
+### Self-hosted Docker configuration
 
-    ```bash
-    # Generate example config
-    ./matrix-line -e -c data/config.yaml
+Start the container once to generate the example config:
 
-    # Edit data/config.yaml and set:
-    #   homeserver.address: http://localhost:8008  (your Matrix server URL)
-    #   homeserver.domain: your.domain.com         (your Matrix server domain)
-    #   appservice.database.uri: sqlite:///data/matrix-line.db  (or a postgres URI)
+```bash
+docker compose up --build
+```
 
-    # Generate appservice registration
-    ./matrix-line -g -c data/config.yaml -r data/registration.yaml
-    ```
+The container will create `data/config.yaml` and exit. Edit it and set:
 
-    Then register the appservice with your homeserver by adding the registration file path to your homeserver config (e.g. for Synapse, add it to `app_service_config_files` in `homeserver.yaml`) and restart the homeserver.
+- `homeserver.address` — your Matrix server URL (e.g. `http://localhost:8008`)
+- `homeserver.domain` — your Matrix server domain (e.g. `your.domain.com`)
+- `database.uri` — your database URI (e.g. `postgres://user:pass@host/db`)
+- `bridge.permissions` — who can use the bridge
 
-5. Build and run the bridge using Docker (use -d for detached mode):
+Start the container again to generate the registration file:
 
-    - **Using Docker Compose:**
+```bash
+docker compose up --build
+```
 
-    ```bash
-    docker compose up --build -d
-    ```
+It will create `data/registration.yaml` and exit. Register the
+appservice with your homeserver by adding the registration file path to
+your homeserver config. For Synapse, add it to
+`app_service_config_files` in `homeserver.yaml`, then restart the
+homeserver.
 
-    To run the bridge without rebuilding, use:
+### Self-hosted Docker run
 
-    ```bash
-    docker compose up -d
-    ```
+```bash
+docker compose up --build -d
+```
 
-    - **Building and running without Docker on Windows (MSYS2 and x86_64-w64-mingw32-gcc required)**
+To run without rebuilding on subsequent starts:
 
-    ```bash
-    # Clone and build olm if not already done
-    git clone https://gitlab.matrix.org/matrix-org/olm.git
-    cd olm
-    cmake -Bbuild -G "Unix Makefiles" -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ -DCMAKE_INSTALL_PREFIX=/mingw64
-    cmake --build build
-    cmake --install build
-    cd ..
-    # Move the .dll and .dll.a files in the matrix-line root directory
+```bash
+docker compose up -d
+```
 
-    # Build the bridge. Make sure to have the olm .dll file(s) in the root of the project.
-    ./build-windows.sh
-    cd data
-    ../matrix-line.exe
-    ```
+---
 
-    - **Other systems:**
+## Native on Windows (without Docker)
 
-    ```bash
-    ./build.sh
-    cd data
-    ../matrix-line
-    ```
+### Windows prerequisites
+
+- [MSYS2](https://www.msys2.org/) with mingw-w64 toolchain:
+
+```bash
+winget install MSYS2.MSYS2
+# Open MSYS2 MinGW 64-bit terminal and install packages:
+pacman -Syu mingw-w64-x86_64-gcc cmake
+```
+
+- [Go](https://go.dev/dl/)
+- [olm](https://gitlab.matrix.org/matrix-org/olm) library:
+
+```bash
+git clone https://gitlab.matrix.org/matrix-org/olm.git
+cd olm
+cmake -Bbuild -G "Unix Makefiles" \
+  -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+  -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+  -DCMAKE_INSTALL_PREFIX=/mingw64
+cmake --build build
+cmake --install build
+cd ..
+```
+
+- If using Beeper, compile [bbctl](https://github.com/beeper/bridge-manager) from source:
+
+```bash
+git clone https://github.com/beeper/bridge-manager.git
+cd bridge-manager
+
+# Windows only: In cmd/bbctl/run.go, remove the following lines
+# because MSYS2 is still seen as Linux, but Windows doesn't support Setpgid:
+#
+#   if runtime.GOOS == "linux" {
+#       cmd.SysProcAttr = &syscall.SysProcAttr{
+#           Setpgid: true,
+#       }
+#   }
+
+./build.sh
+```
+
+### Windows build
+
+Copy the olm `.dll` and `.dll.a` files to the project root, then:
+
+```bash
+./build-windows.sh
+```
+
+### Windows configuration
+
+**Beeper users:**
+
+```bash
+bbctl c --type bridgev2 sh-line > data/config.yaml
+bbctl r sh-line > data/registration.yaml
+```
+
+**Self-hosted Matrix server:**
+
+```bash
+./matrix-line.exe -e -c data/config.yaml
+# Edit data/config.yaml and set:
+#   homeserver.address: http://localhost:8008  (your Matrix server URL)
+#   homeserver.domain: your.domain.com         (your Matrix server domain)
+#   database.uri: sqlite:///data/matrix-line.db  (or a postgres URI)
+#   bridge.permissions: (who can use the bridge)
+
+./matrix-line.exe -g -c data/config.yaml -r data/registration.yaml
+# Register the appservice with your homeserver
+```
+
+### Windows run
+
+```bash
+cd data
+../matrix-line.exe
+```
+
+---
+
+## Native on Linux / macOS (without Docker)
+
+### Linux / macOS prerequisites
+
+- [Go](https://go.dev/dl/) and build tools (`gcc`, `make`)
+- [olm](https://gitlab.matrix.org/matrix-org/olm) library (install via your package manager or build from source)
+- If using Beeper, compile [bbctl](https://github.com/beeper/bridge-manager) from source
+
+### Linux / macOS build
+
+```bash
+./build.sh
+```
+
+### Linux / macOS configuration
+
+**Beeper users:**
+
+```bash
+bbctl c --type bridgev2 sh-line > data/config.yaml
+bbctl r sh-line > data/registration.yaml
+```
+
+**Self-hosted Matrix server:**
+
+```bash
+./matrix-line -e -c data/config.yaml
+# Edit data/config.yaml and set:
+#   homeserver.address: http://localhost:8008  (your Matrix server URL)
+#   homeserver.domain: your.domain.com         (your Matrix server domain)
+#   database.uri: sqlite:///data/matrix-line.db  (or a postgres URI)
+#   bridge.permissions: (who can use the bridge)
+
+./matrix-line -g -c data/config.yaml -r data/registration.yaml
+# Register the appservice with your homeserver
+```
+
+### Linux / macOS run
+
+```bash
+cd data
+../matrix-line
+```
+
+---
 
 ## Login
-
-### Using the LINE SelfHosted Bridge Bot
-
-1. Open the Matrix client of your choice and start a chat with `@sh-linebot:your.matrix.homeserver.domain`. (For local beeper bridges, use `@sh-linebot:beeper.local`)
-2. Send the command `login` and follow the instructions to log in to your LINE account.
-
-or
 
 ### Via Beeper Desktop Settings
 
 1. Open Beeper Desktop Settings
 2. Navigate to `Bridges`
-3. Click on the three dots next to your LINE Bridge and select `Experimental: Add an account`
+3. Click the three dots next to your LINE Bridge and select
+   `Experimental: Add an account`
 4. Follow the instructions to log in to your LINE account.
+
+### Using the Bridge Bot (any Matrix client)
+
+1. Open your Matrix client and start a chat with
+   `@sh-linebot:your.matrix.homeserver.domain`.\
+   For Beeper, use `@sh-linebot:beeper.local`.
+2. Send the command `login` and follow the instructions.
 
 ## Can't log in?
 
-This bridge uses the email from your Account information. If your account is an older account, you signed in using phone number or signed in with Google, you will not have an email set for your LINE account.
+There are two common reasons login can fail:
 
-### How to set an email for your LINE account
+### 1. No email is set on your LINE account
+
+This bridge uses the email from your account information. If your
+account is older, you signed in using a phone number, or you signed in
+with Google, you may not have an email set for your LINE account.
+
+**How to set an email for your LINE account:**
 
 1. Open the LINE app on your mobile device.
 2. Go to `Settings` > `Account`.
 3. Tap on `Email address` and set your email address.
+
+### 2. Letter Sealing (End-to-End Encryption) is disabled
+
+This bridge requires LINE's end-to-end encryption feature,
+`Letter Sealing`, to be enabled. If it is disabled, the login will fail
+with `Error when logging in: Internal error`.
+
+**How to enable Letter Sealing:**
+
+1. Open the LINE app on your mobile device.
+2. Go to `Settings` > `Privacy`.
+3. Turn `Letter Sealing` on (note: it can't be turned off once you do so)
+4. Try logging in to the bridge again.
+
+> [!NOTE]
+>
+> - The `Letter Sealing` setting is only configurable from the LINE
+>   mobile app.
+> - Once the setting's turned on it can't be turned off.
+> - `Letter Sealing` was introduced as an optional feature in August 2015.
+> - It was enabled by default in major LINE clients in 2016.
+> - Since 2021, it has been enabled by default in all regions.
+> - For more information, see
+>   [issue #42](https://github.com/highesttt/matrix-line-messenger/issues/42).
