@@ -43,7 +43,9 @@ func (lc *LineConnector) GetBridgeInfoVersion() (info, capabilities int) {
 }
 
 func (lc *LineConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
-	return &bridgev2.NetworkGeneralCapabilities{}
+	return &bridgev2.NetworkGeneralCapabilities{
+		AggressiveUpdateInfo: true,
+	}
 }
 
 func (lc *LineConnector) GetName() bridgev2.BridgeName {

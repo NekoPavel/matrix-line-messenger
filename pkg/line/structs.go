@@ -178,6 +178,12 @@ type Contact struct {
 	PicturePath   string `json:"picturePath"`
 }
 
+type BuddyProfile struct {
+	Mid         string `json:"buddyMid"`
+	DisplayName string `json:"displayName"`
+	PicturePath string `json:"picturePath"`
+}
+
 type E2EEGroupSharedKey struct {
 	KeyVersion         int    `json:"keyVersion"`
 	GroupKeyID         int    `json:"groupKeyId"`
