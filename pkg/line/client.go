@@ -361,17 +361,13 @@ func (c *Client) RefreshAccessToken(refreshToken string) (*TokenV3IssueResult, e
 const OBSBaseURL = "https://obs.line-apps.com"
 
 // obsTypeFromSID maps the OBS SID to the correct "type" field in X-Obs-Params.
+// Encrypted endpoints (emi/emv/emf/ema) expect "file" since the data is opaque binary.
+// The plain "m" endpoint expects the actual content type.
 func obsTypeFromSID(sid string) string {
-	switch sid {
-	case "emi", "m":
+	if sid == "m" {
 		return "image"
-	case "emv":
-		return "video"
-	case "ema":
-		return "audio"
-	default:
-		return "file"
 	}
+	return "file"
 }
 
 // UploadOBS uploads media to LINE's Object Storage and returns the Object ID (OID).

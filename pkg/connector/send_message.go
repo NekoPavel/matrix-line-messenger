@@ -103,6 +103,11 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 			extension = "png"
 		}
 
+		// Flatten transparent PNGs onto white background (matches LINE native client)
+		if mimeType == "image/png" {
+			data = flattenPNGTransparency(data)
+		}
+
 		contentType = int(ContentImage)
 
 		if plainText {
@@ -128,11 +133,7 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 
 			fileName := msg.Content.Body
 			if fileName == "" {
-				if isGif {
-					fileName = "animation.gif"
-				} else {
-					fileName = "image.jpg"
-				}
+				fileName = "image." + extension
 			}
 			contentMetadata["FILE_NAME"] = fileName
 
@@ -225,11 +226,7 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 
 			fileName := msg.Content.Body
 			if fileName == "" {
-				if isGif {
-					fileName = "animation.gif"
-				} else {
-					fileName = "image.jpg"
-				}
+				fileName = "image." + extension
 			}
 			contentMetadata["FILE_NAME"] = fileName
 
@@ -245,7 +242,8 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 				contentMetadata["MEDIA_CONTENT_INFO"] = string(mediaInfoJSON)
 			}
 
-			payload = []byte("{}")
+			imgPayload := map[string]string{"keyMaterial": keyMaterialB64}
+			payload, _ = json.Marshal(imgPayload)
 		}
 
 	case event.MsgFile:
@@ -441,7 +439,8 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 			contentMetadata["SID"] = "emv"
 			contentMetadata["ENC_KM"] = keyMaterialB64
 
-			payload = []byte("{}")
+			vidPayload := map[string]string{"keyMaterial": keyMaterialB64}
+			payload, _ = json.Marshal(vidPayload)
 
 			lc.UserLogin.Bridge.Log.Info().
 				Str("oid", oid).

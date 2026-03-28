@@ -12,9 +12,10 @@ import (
 	"fmt"
 	"hash/crc32"
 	"image"
+	"image/color"
 	_ "image/gif"
 	"image/jpeg"
-	_ "image/png"
+	"image/png"
 	"io"
 	"os"
 
@@ -192,6 +193,37 @@ func generateThumbnail(imageData []byte) ([]byte, int, int, error) {
 	}
 
 	return buf.Bytes(), newWidth, newHeight, nil
+}
+
+// flattenPNGTransparency composites a PNG with alpha onto a white background,
+// matching LINE's native client behavior for transparent PNGs.
+func flattenPNGTransparency(data []byte) []byte {
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil || format != "png" {
+		return data
+	}
+
+	// Check if image actually has alpha by looking at the color model
+	bounds := img.Bounds()
+	hasAlpha := false
+	switch img.(type) {
+	case *image.NRGBA, *image.RGBA, *image.NRGBA64, *image.RGBA64:
+		hasAlpha = true
+	}
+	if !hasAlpha {
+		return data
+	}
+
+	// Composite onto white background
+	dst := image.NewRGBA(bounds)
+	draw.Draw(dst, bounds, image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(dst, bounds, img, bounds.Min, draw.Over)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return data
+	}
+	return buf.Bytes()
 }
 
 func isAnimatedGif(data []byte) bool {
