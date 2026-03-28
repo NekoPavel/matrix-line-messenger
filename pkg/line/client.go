@@ -360,6 +360,20 @@ func (c *Client) RefreshAccessToken(refreshToken string) (*TokenV3IssueResult, e
 
 const OBSBaseURL = "https://obs.line-apps.com"
 
+// obsTypeFromSID maps the OBS SID to the correct "type" field in X-Obs-Params.
+func obsTypeFromSID(sid string) string {
+	switch sid {
+	case "emi", "m":
+		return "image"
+	case "emv":
+		return "video"
+	case "ema":
+		return "audio"
+	default:
+		return "file"
+	}
+}
+
 // UploadOBS uploads media to LINE's Object Storage and returns the Object ID (OID).
 // Default uses "emi" SID for images
 func (c *Client) UploadOBS(data []byte) (string, error) {
@@ -392,7 +406,7 @@ func (c *Client) UploadOBSWithSID(data []byte, sid string) (string, error) {
 	obsParams := map[string]string{
 		"ver":  "2.0",
 		"name": fmt.Sprintf("%d", time.Now().UnixMilli()),
-		"type": "file",
+		"type": obsTypeFromSID(sid),
 	}
 	obsParamsJSON, _ := json.Marshal(obsParams)
 	obsParamsB64 := base64.StdEncoding.EncodeToString(obsParamsJSON)
@@ -453,7 +467,7 @@ func (c *Client) UploadOBSWithOIDAndSID(data []byte, oid string, sid string) err
 	obsParams := map[string]string{
 		"ver":  "2.0",
 		"name": fmt.Sprintf("%d", time.Now().UnixMilli()),
-		"type": "file",
+		"type": obsTypeFromSID(sid),
 	}
 	obsParamsJSON, _ := json.Marshal(obsParams)
 	obsParamsB64 := base64.StdEncoding.EncodeToString(obsParamsJSON)
