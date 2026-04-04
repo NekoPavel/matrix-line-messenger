@@ -33,7 +33,10 @@ Based on the [mautrix-twilio](https://github.com/mautrix/twilio) bridge
 
 ## Features
 
-- [x] Messages (Text, Images, Videos, voice notes and any other kind of files)
+ℹ️ Works with both [Letter Sealing](readme/LETTER_SEALING.md) `ON` and `OFF` accounts.
+
+- [x] Messages (Text, Images, Videos, and Files)
+- [ ] Audio / voice notes (not yet supported)
 - [x] Read receipts
 - [x] Reaction support (Receive ONLY)
 - [x] Replies
@@ -301,26 +304,11 @@ with Google, you may not have an email set for your LINE account.
 2. Go to `Settings` > `Account`.
 3. Tap on `Email address` and set your email address.
 
-### 2. Letter Sealing (End-to-End Encryption) is disabled
+### 2. Letter Sealing (End-to-End Encryption)
 
-This bridge requires LINE's end-to-end encryption feature,
-`Letter Sealing`, to be enabled. If it is disabled, the login will fail
-with `Error when logging in: Internal error`.
+The bridge supports both `Letter Sealing` ON and OFF accounts. Messages
+to peers or groups without `Letter Sealing` are sent as plain text
+automatically.
 
-**How to enable Letter Sealing:**
-
-1. Open the LINE app on your mobile device.
-2. Go to `Settings` > `Privacy`.
-3. Turn `Letter Sealing` on (note: it can't be turned off once you do so)
-4. Try logging in to the bridge again.
-
-> [!NOTE]
->
-> - The `Letter Sealing` setting is only configurable from the LINE
->   mobile app.
-> - Once the setting's turned on it can't be turned off.
-> - `Letter Sealing` was introduced as an optional feature in August 2015.
-> - It was enabled by default in major LINE clients in 2016.
-> - Since 2021, it has been enabled by default in all regions.
-> - For more information, see
->   [issue #42](https://github.com/highesttt/matrix-line-messenger/issues/42).
+For details on how the bridge handles different Letter Sealing
+combinations, see [readme/LETTER_SEALING.md](readme/LETTER_SEALING.md).
