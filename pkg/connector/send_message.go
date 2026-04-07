@@ -606,7 +606,15 @@ func (lc *LineClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridge
 	lc.sentReqSeqs[reqSeq] = time.Now()
 	lc.reqSeqMu.Unlock()
 
-	return client.UnsendMessage(int64(reqSeq), string(msg.TargetMessage.ID))
+	err := client.UnsendMessage(int64(reqSeq), string(msg.TargetMessage.ID))
+	if err != nil && strings.Contains(err.Error(), "message too old") {
+		return bridgev2.WrapErrorInStatus(fmt.Errorf("message too old to unsend on LINE (24h limit)")).
+			WithStatus(event.MessageStatusFail).
+			WithErrorReason(event.MessageStatusTooOld).
+			WithIsCertain(true).
+			WithSendNotice(true)
+	}
+	return err
 }
 
 func (lc *LineClient) HandleMatrixLeaveRoom(ctx context.Context, portal *bridgev2.Portal) error {
