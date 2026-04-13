@@ -47,6 +47,7 @@ func (lc *LineClient) GetCapabilities(ctx context.Context, portal *bridgev2.Port
 		ReadReceipts:          true,
 		Delete:                event.CapLevelPartialSupport,
 		DeleteChatForEveryone: true,
+		LocationMessage:       event.CapLevelPartialSupport,
 		File: event.FileFeatureMap{
 			event.MsgImage: {
 				Caption: event.CapLevelRejected,
