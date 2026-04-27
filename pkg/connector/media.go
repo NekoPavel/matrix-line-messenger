@@ -8,9 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"image"
 	_ "image/gif"
 	"image/jpeg"
@@ -260,7 +258,6 @@ func extractVideoThumbnail(videoData []byte) ([]byte, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("failed to create temp video file: %w", err)
 	}
 	defer os.Remove(tmpVideoFile.Name())
-	defer tmpVideoFile.Close()
 
 	if _, err := tmpVideoFile.Write(videoData); err != nil {
 		return nil, 0, 0, fmt.Errorf("failed to write video data: %w", err)
@@ -320,35 +317,4 @@ func generateChunkHashes(encryptedData []byte) []byte {
 	}
 
 	return allHashes
-}
-
-func forceAPNGLoop(data []byte) []byte {
-	if len(data) < 8 || string(data[:8]) != "\x89PNG\r\n\x1a\n" {
-		return data
-	}
-
-	offset := 8
-	for offset < len(data) {
-		if offset+8 > len(data) {
-			break
-		}
-		length := binary.BigEndian.Uint32(data[offset : offset+4])
-		chunkType := string(data[offset+4 : offset+8])
-
-		if chunkType == "acTL" {
-			if length >= 8 && offset+8+8 <= len(data) {
-				binary.BigEndian.PutUint32(data[offset+8+4:offset+8+8], 0)
-
-				crc := crc32.NewIEEE()
-				crc.Write(data[offset+4 : offset+8+int(length)])
-				newCRC := crc.Sum32()
-
-				binary.BigEndian.PutUint32(data[offset+8+int(length):offset+8+int(length)+4], newCRC)
-			}
-			break
-		}
-
-		offset += 4 + 4 + int(length) + 4
-	}
-	return data
 }

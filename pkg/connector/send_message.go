@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -54,6 +55,37 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 		contentMetadata["e2eeVersion"] = "2"
 	}
 
+	// Detect media files sent as MsgFile and handle them with the correct LINE content type.
+	// Matrix clients often send media as MsgFile (e.g. drag-and-drop), which would otherwise
+	// be sent as ContentFile (14) instead of the appropriate media type on LINE.
+	effectiveMsgType := msg.Content.MsgType
+	if effectiveMsgType == event.MsgFile && msg.Content.Info != nil {
+		mime := msg.Content.Info.MimeType
+		if strings.HasPrefix(mime, "audio/") {
+			effectiveMsgType = event.MsgAudio
+		} else if strings.HasPrefix(mime, "video/") {
+			effectiveMsgType = event.MsgVideo
+		} else if strings.HasPrefix(mime, "image/") {
+			effectiveMsgType = event.MsgImage
+		}
+	}
+
+	// For non-text messages, check with the server whether to use E2EE or plain media upload.
+	// This must happen before media processing since it affects the upload path.
+	useE2EEMedia := !plainText
+	if useE2EEMedia && effectiveMsgType != event.MsgText {
+		mediaContentType := contentTypeForMsgType(effectiveMsgType)
+		if !lc.shouldUseE2EEMediaFlow(portalMid, mediaContentType) {
+			lc.UserLogin.Bridge.Log.Info().
+				Str("portal", portalMid).
+				Int("content_type", mediaContentType).
+				Msg("Server indicates plain media flow for this chat")
+			useE2EEMedia = false
+			plainText = true
+			delete(contentMetadata, "e2eeVersion")
+		}
+	}
+
 	// For plain text, we set lineMsg.Text directly; payload is used only for E2EE.
 	var payload []byte
 	var plainTextBody string // used when plainText == true for text messages
@@ -66,7 +98,12 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	var originalMediaData []byte
 	var originalThumbData []byte
 
-	switch msg.Content.MsgType {
+	// For file uploads, save the raw data so we can retry with ZIP wrapping if LINE rejects
+	// the raw file (some file types require ZIP, others like PDF work directly).
+	var rawFileData []byte
+	var rawFileName string
+
+	switch effectiveMsgType {
 	case event.MsgText:
 		contentType = int(ContentText)
 		if plainText {
@@ -222,6 +259,9 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 		if fileName == "" {
 			fileName = "file.bin"
 		}
+		rawFileData = data
+		rawFileName = fileName
+
 		contentMetadata["FILE_NAME"] = fileName
 		contentMetadata["FILE_SIZE"] = fmt.Sprintf("%d", len(data))
 		contentMetadata["contentType"] = fmt.Sprintf("%d", ContentFile)
@@ -395,8 +435,53 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 				Msg("Prepared video message")
 		}
 
+	case event.MsgAudio:
+		data, err := lc.UserLogin.Bridge.Bot.DownloadMedia(ctx, msg.Content.URL, msg.Content.File)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download audio from matrix: %w", err)
+		}
+
+		contentType = int(ContentAudio)
+		contentMetadata["FILE_SIZE"] = fmt.Sprintf("%d", len(data))
+		contentMetadata["contentType"] = fmt.Sprintf("%d", ContentAudio)
+
+		if msg.Content.Info != nil && msg.Content.Info.Duration > 0 {
+			contentMetadata["DURATION"] = fmt.Sprintf("%d", msg.Content.Info.Duration)
+			contentMetadata["AUDLEN"] = fmt.Sprintf("%d", msg.Content.Info.Duration)
+		}
+
+		if plainText {
+			plainMediaData = data
+		} else {
+			if isGroup {
+				originalMediaData = data
+			}
+
+			uploadData, keyMaterialB64, err := lc.encryptFileData(data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to encrypt audio data: %w", err)
+			}
+
+			oid, err := client.UploadOBSWithSID(uploadData, "ema")
+			if err != nil {
+				return nil, fmt.Errorf("failed to upload audio to OBS: %w", err)
+			}
+
+			contentMetadata["OID"] = oid
+			contentMetadata["SID"] = "ema"
+			contentMetadata["ENC_KM"] = keyMaterialB64
+
+			audioPayload := map[string]string{"keyMaterial": keyMaterialB64}
+			payload, _ = json.Marshal(audioPayload)
+
+			lc.UserLogin.Bridge.Log.Info().
+				Str("oid", oid).
+				Int("upload_size", len(uploadData)).
+				Msg("Prepared audio message")
+		}
+
 	default:
-		return nil, fmt.Errorf("message type %s not implemented", msg.Content.MsgType)
+		return nil, fmt.Errorf("message type %s not implemented", effectiveMsgType)
 	}
 
 	// Encryption phase — skip entirely for plain text
@@ -508,6 +593,70 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	lc.reqSeqMu.Unlock()
 
 	sentMsg, err := client.SendMessage(int64(reqSeq), lineMsg)
+
+	// LINE rejects some file types from the Chrome Extension client.
+	// Retry by wrapping the file in a ZIP archive (matching Chrome Extension behavior).
+	if err != nil && strings.Contains(err.Error(), "Extension does not support file upload") && rawFileData != nil {
+		lc.UserLogin.Bridge.Log.Info().Str("file_name", rawFileName).Msg("File upload rejected by LINE, retrying with ZIP wrapping")
+
+		zipData, zipErr := wrapInZip(rawFileName, rawFileData)
+		if zipErr != nil {
+			return nil, fmt.Errorf("failed to wrap file in zip: %w", zipErr)
+		}
+		zipFileName := rawFileName + ".zip"
+
+		contentMetadata["FILE_NAME"] = zipFileName
+		contentMetadata["FILE_SIZE"] = fmt.Sprintf("%d", len(zipData))
+		lineMsg.ContentMetadata = contentMetadata
+
+		if plainText {
+			plainMediaData = zipData
+		} else {
+			// Re-encrypt and re-upload the zipped data
+			uploadData, keyMaterialB64, encErr := lc.encryptFileData(zipData)
+			if encErr != nil {
+				return nil, fmt.Errorf("failed to encrypt zipped file: %w", encErr)
+			}
+			oid, uploadErr := client.UploadOBSWithSID(uploadData, "emf")
+			if uploadErr != nil {
+				return nil, fmt.Errorf("failed to upload zipped file to OBS: %w", uploadErr)
+			}
+			contentMetadata["OID"] = oid
+			contentMetadata["ENC_KM"] = keyMaterialB64
+			lineMsg.ContentMetadata = contentMetadata
+
+			zipPayload, _ := json.Marshal(map[string]string{
+				"keyMaterial": keyMaterialB64,
+				"fileName":    zipFileName,
+			})
+
+			if isGroup {
+				chunks, err = lc.E2EE.EncryptGroupMessageRaw(portalMid, fromMid, contentType, zipPayload)
+			} else {
+				myRaw, myKeyID, errKey := lc.E2EE.MyKeyIDs()
+				if errKey != nil {
+					return nil, fmt.Errorf("missing own E2EE key for zip retry: %w", errKey)
+				}
+				peerRaw, peerPub, errPeer := lc.ensurePeerKey(ctx, portalMid)
+				if errPeer != nil {
+					return nil, fmt.Errorf("failed to get peer key for zip retry: %w", errPeer)
+				}
+				chunks, err = lc.E2EE.EncryptMessageV2Raw(portalMid, fromMid, myKeyID, peerPub, myRaw, peerRaw, contentType, zipPayload)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to encrypt zipped file message: %w", err)
+			}
+			lineMsg.Chunks = chunks
+		}
+
+		retryReqSeq := int(time.Now().UnixMilli() % 1_000_000_000)
+		lc.reqSeqMu.Lock()
+		lc.sentReqSeqs[retryReqSeq] = time.Now()
+		lc.reqSeqMu.Unlock()
+
+		sentMsg, err = client.SendMessage(int64(retryReqSeq), lineMsg)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -518,6 +667,8 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 		switch contentType {
 		case int(ContentVideo):
 			obsType = "video"
+		case int(ContentAudio):
+			obsType = "audio"
 		case int(ContentFile):
 			obsType = "file"
 		}
@@ -548,6 +699,39 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	}, nil
 }
 
+// wrapInZip creates a ZIP archive containing a single file with the given name and data.
+// LINE's Chrome Extension wraps file uploads in ZIP before sending.
+func wrapInZip(fileName string, data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	fw, err := zw.Create(fileName)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := fw.Write(data); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func contentTypeForMsgType(msgType event.MessageType) int {
+	switch msgType {
+	case event.MsgImage:
+		return int(ContentImage)
+	case event.MsgVideo:
+		return int(ContentVideo)
+	case event.MsgAudio:
+		return int(ContentAudio)
+	case event.MsgFile:
+		return int(ContentFile)
+	default:
+		return int(ContentText)
+	}
+}
+
 func (lc *LineClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2.MatrixMessageRemove) error {
 	client := line.NewClient(lc.AccessToken)
 
@@ -559,7 +743,15 @@ func (lc *LineClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridge
 	lc.sentReqSeqs[reqSeq] = time.Now()
 	lc.reqSeqMu.Unlock()
 
-	return client.UnsendMessage(int64(reqSeq), string(msg.TargetMessage.ID))
+	err := client.UnsendMessage(int64(reqSeq), string(msg.TargetMessage.ID))
+	if err != nil && strings.Contains(err.Error(), "message too old") {
+		return bridgev2.WrapErrorInStatus(fmt.Errorf("message too old to unsend on LINE (24h limit)")).
+			WithStatus(event.MessageStatusFail).
+			WithErrorReason(event.MessageStatusTooOld).
+			WithIsCertain(true).
+			WithSendNotice(true)
+	}
+	return err
 }
 
 func (lc *LineClient) HandleMatrixLeaveRoom(ctx context.Context, portal *bridgev2.Portal) error {

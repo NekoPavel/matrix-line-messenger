@@ -2,6 +2,7 @@ package line
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,8 +10,12 @@ import (
 	"strings"
 )
 
+// sseHTTPClient is a dedicated HTTP client for SSE connections with no timeout.
+// Reused across reconnects to avoid allocating a new transport pool each time.
+var sseHTTPClient = &http.Client{}
+
 // ListenSSE connects to the Event Stream and blocks
-func (c *Client) ListenSSE(localRev int64, callback func(event, data string)) error {
+func (c *Client) ListenSSE(ctx context.Context, localRev int64, callback func(event, data string)) error {
 	q := url.Values{}
 	q.Set("localRev", strconv.FormatInt(localRev, 10))
 	q.Set("version", ExtensionVersion)
@@ -19,7 +24,7 @@ func (c *Client) ListenSSE(localRev int64, callback func(event, data string)) er
 
 	fullURL := fmt.Sprintf("https://line-chrome-gw.line-apps.com/api/operation/receive?%s", q.Encode())
 
-	req, err := http.NewRequest("GET", fullURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
 	if err != nil {
 		return err
 	}
@@ -33,7 +38,7 @@ func (c *Client) ListenSSE(localRev int64, callback func(event, data string)) er
 		req.Header.Set("Cookie", fmt.Sprintf("lct=%s", c.AccessToken))
 	}
 
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := sseHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}

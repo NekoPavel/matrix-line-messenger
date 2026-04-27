@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,8 +29,17 @@ type LineClient struct {
 	reqSeqMu    sync.Mutex
 	sentReqSeqs map[int]time.Time
 
-	noE2EEGroups map[string]time.Time // chatMid -> when group E2EE failure was cached
-	contactCache map[string]line.Contact
+	noE2EEGroups   map[string]time.Time // chatMid -> when group E2EE failure was cached
+	contactCache   map[string]cachedContact
+	mediaFlowCache map[string]cachedMediaFlow
+
+	wg sync.WaitGroup
+}
+
+type cachedMediaFlow struct {
+	flowMap  map[string]int
+	cachedAt time.Time
+	ttl      time.Duration
 }
 
 type peerKeyInfo struct {
@@ -37,6 +47,60 @@ type peerKeyInfo struct {
 	pub       string
 	noE2EE    bool      // true if peer has Letter Sealing off
 	checkedAt time.Time // when noE2EE was last verified
+}
+
+const contactCacheTTL = 1 * time.Hour
+
+type cachedContact struct {
+	line.Contact
+	cachedAt time.Time
+}
+
+const defaultMediaFlowTTL = 6 * time.Hour
+
+// shouldUseE2EEMediaFlow checks whether the server wants E2EE upload (flow 2)
+// for the given chat and content type. Returns true for E2EE, false for plain.
+// Falls back to true (E2EE) if the server call fails, to preserve existing behavior.
+func (lc *LineClient) shouldUseE2EEMediaFlow(chatMid string, contentType int) bool {
+	if lc.mediaFlowCache == nil {
+		lc.mediaFlowCache = make(map[string]cachedMediaFlow)
+	}
+
+	if cached, ok := lc.mediaFlowCache[chatMid]; ok && time.Since(cached.cachedAt) < cached.ttl {
+		flow, exists := cached.flowMap[strconv.Itoa(contentType)]
+		if exists {
+			return flow == 2
+		}
+		// Content type not in map — default to E2EE
+		return true
+	}
+
+	client := line.NewClient(lc.AccessToken)
+	resp, err := client.DetermineMediaMessageFlow(chatMid)
+	if err != nil {
+		lc.UserLogin.Bridge.Log.Warn().Err(err).Str("chat_mid", chatMid).
+			Msg("Failed to determine media flow, defaulting to E2EE upload")
+		return true
+	}
+
+	ttl := defaultMediaFlowTTL
+	if resp.CacheTTLMillis != "" {
+		if parsed, err := strconv.ParseInt(resp.CacheTTLMillis, 10, 64); err == nil && parsed > 0 {
+			ttl = time.Duration(parsed) * time.Millisecond
+		}
+	}
+
+	lc.mediaFlowCache[chatMid] = cachedMediaFlow{
+		flowMap:  resp.FlowMap,
+		cachedAt: time.Now(),
+		ttl:      ttl,
+	}
+
+	flow, exists := resp.FlowMap[strconv.Itoa(contentType)]
+	if exists {
+		return flow == 2
+	}
+	return true
 }
 
 var _ bridgev2.NetworkAPI = (*LineClient)(nil)
@@ -77,8 +141,7 @@ func (lc *LineClient) isRefreshRequired(err error) bool {
 
 func (lc *LineClient) isLoggedOut(err error) bool {
 	msg := err.Error()
-	return strings.Contains(msg, "V3_TOKEN_CLIENT_LOGGED_OUT") ||
-		strings.Contains(msg, "\"code\":10051")
+	return strings.Contains(msg, "V3_TOKEN_CLIENT_LOGGED_OUT")
 }
 
 // recoverToken attempts to restore a valid session by refreshing, then re-logging in.
@@ -97,7 +160,7 @@ func (lc *LineClient) Connect(ctx context.Context) {
 		lc.peerKeys = make(map[string]peerKeyInfo)
 	}
 	if lc.contactCache == nil {
-		lc.contactCache = make(map[string]line.Contact)
+		lc.contactCache = make(map[string]cachedContact)
 	}
 	lc.reqSeqMu.Lock()
 	if lc.sentReqSeqs == nil {
@@ -166,6 +229,7 @@ func (lc *LineClient) Connect(ctx context.Context) {
 		}
 	}
 
+	lc.wg.Add(4)
 	go lc.syncChats(ctx)
 	go lc.syncDMChats(ctx)
 	go lc.prefetchMessages(ctx)
@@ -285,7 +349,9 @@ func (lc *LineClient) ensureValidToken(ctx context.Context) error {
 	return lc.tryLogin(ctx)
 }
 
-func (lc *LineClient) Disconnect() {}
+func (lc *LineClient) Disconnect() {
+	lc.wg.Wait()
+}
 
 func (lc *LineClient) IsLoggedIn() bool { return lc.AccessToken != "" }
 

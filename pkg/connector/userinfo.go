@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
+	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/ptr"
 
 	"maunium.net/go/mautrix/bridgev2"
@@ -44,16 +46,25 @@ func (lc *LineClient) GetCapabilities(ctx context.Context, portal *bridgev2.Port
 		MaxTextLength:         5000,
 		Reply:                 event.CapLevelFullySupported,
 		ReadReceipts:          true,
-		Delete:                event.CapLevelPartialSupport,
+		Delete:                event.CapLevelFullySupported,
+		DeleteMaxAge:          &jsontime.Seconds{Duration: 24 * time.Hour},
 		DeleteChatForEveryone: true,
+		LocationMessage:       event.CapLevelPartialSupport,
 		File: event.FileFeatureMap{
 			event.MsgImage: {
 				Caption: event.CapLevelRejected,
 				MimeTypes: map[string]event.CapabilitySupportLevel{
-					"image/jpeg": event.CapLevelFullySupported,
-					"image/png":  event.CapLevelFullySupported,
-					"image/gif":  event.CapLevelFullySupported,
-					"image/webp": event.CapLevelFullySupported,
+					"image/jpeg":    event.CapLevelFullySupported,
+					"image/png":     event.CapLevelFullySupported,
+					"image/gif":     event.CapLevelFullySupported,
+					"image/webp":    event.CapLevelFullySupported,
+					"image/avif":    event.CapLevelFullySupported,
+					"image/bmp":     event.CapLevelFullySupported,
+					"image/tiff":    event.CapLevelFullySupported,
+					"image/svg+xml": event.CapLevelFullySupported,
+					"image/heic":    event.CapLevelFullySupported,
+					"image/heif":    event.CapLevelFullySupported,
+					"image/jxl":     event.CapLevelFullySupported,
 				},
 			},
 			event.MsgFile: {
@@ -66,17 +77,48 @@ func (lc *LineClient) GetCapabilities(ctx context.Context, portal *bridgev2.Port
 			event.MsgVideo: {
 				Caption: event.CapLevelRejected,
 				MimeTypes: map[string]event.CapabilitySupportLevel{
-					"video/mp4":       event.CapLevelFullySupported,
-					"video/webm":      event.CapLevelFullySupported,
-					"video/quicktime": event.CapLevelFullySupported,
+					"video/mp4":        event.CapLevelFullySupported,
+					"video/webm":       event.CapLevelFullySupported,
+					"video/quicktime":  event.CapLevelFullySupported,
+					"video/3gpp":       event.CapLevelFullySupported,
+					"video/x-matroska": event.CapLevelFullySupported,
+					"video/mpeg":       event.CapLevelFullySupported,
+					"video/ogg":        event.CapLevelFullySupported,
+					"video/x-msvideo":  event.CapLevelFullySupported,
 				},
 			},
 			event.MsgAudio: {
 				Caption: event.CapLevelRejected,
 				MimeTypes: map[string]event.CapabilitySupportLevel{
-					"audio/mpeg": event.CapLevelFullySupported,
-					"audio/ogg":  event.CapLevelFullySupported,
-					"audio/mp4":  event.CapLevelFullySupported,
+					"audio/mpeg":  event.CapLevelFullySupported,
+					"audio/ogg":   event.CapLevelFullySupported,
+					"audio/mp4":   event.CapLevelFullySupported,
+					"audio/x-m4a": event.CapLevelFullySupported,
+					"audio/aac":   event.CapLevelFullySupported,
+					"audio/wav":   event.CapLevelFullySupported,
+					"audio/x-wav": event.CapLevelFullySupported,
+					"audio/flac":  event.CapLevelFullySupported,
+					"audio/opus":  event.CapLevelFullySupported,
+					"audio/webm":  event.CapLevelFullySupported,
+					"audio/amr":   event.CapLevelFullySupported,
+					"audio/3gpp":  event.CapLevelFullySupported,
+				},
+			},
+			event.CapMsgVoice: {
+				Caption: event.CapLevelRejected,
+				MimeTypes: map[string]event.CapabilitySupportLevel{
+					"audio/ogg":   event.CapLevelFullySupported,
+					"audio/mp4":   event.CapLevelFullySupported,
+					"audio/mpeg":  event.CapLevelFullySupported,
+					"audio/x-m4a": event.CapLevelFullySupported,
+					"audio/aac":   event.CapLevelFullySupported,
+					"audio/wav":   event.CapLevelFullySupported,
+					"audio/x-wav": event.CapLevelFullySupported,
+					"audio/flac":  event.CapLevelFullySupported,
+					"audio/opus":  event.CapLevelFullySupported,
+					"audio/webm":  event.CapLevelFullySupported,
+					"audio/amr":   event.CapLevelFullySupported,
+					"audio/3gpp":  event.CapLevelFullySupported,
 				},
 			},
 		},
@@ -148,7 +190,6 @@ func (lc *LineClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) 
 }
 
 func (lc *LineClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*bridgev2.UserInfo, error) {
-	lc.UserLogin.Bridge.Log.Debug().Str("ghost_id", string(ghost.ID)).Msg("GetUserInfo called")
 	contact := lc.getContact(ctx, string(ghost.ID))
 	var avatar *bridgev2.Avatar
 	if contact.PicturePath != "" {
@@ -168,8 +209,8 @@ func (lc *LineClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*
 }
 
 func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
-	if contact, ok := lc.contactCache[mid]; ok {
-		return contact
+	if cached, ok := lc.contactCache[mid]; ok && time.Since(cached.cachedAt) < contactCacheTTL {
+		return cached.Contact
 	}
 
 	// Use GetProfile for our own user data
@@ -184,7 +225,7 @@ func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
 		}
 		if err == nil && profile != nil {
 			contact := line.Contact{Mid: mid, DisplayName: profile.DisplayName, PicturePath: profile.PicturePath}
-			lc.contactCache[mid] = contact
+			lc.contactCache[mid] = cachedContact{Contact: contact, cachedAt: time.Now()}
 			return contact
 		}
 		return line.Contact{Mid: mid, DisplayName: mid}
@@ -200,7 +241,7 @@ func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
 	}
 	if err == nil && res != nil && res.Contacts != nil {
 		if wrapper, ok := res.Contacts[mid]; ok {
-			lc.contactCache[mid] = wrapper.Contact
+			lc.contactCache[mid] = cachedContact{Contact: wrapper.Contact, cachedAt: time.Now()}
 			return wrapper.Contact
 		}
 	}
@@ -217,7 +258,7 @@ func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
 	if err == nil && buddy != nil {
 		lc.UserLogin.Bridge.Log.Debug().Str("mid", mid).Str("display_name", buddy.DisplayName).Str("picture_path", buddy.PicturePath).Msg("Got buddy profile")
 		contact := line.Contact{Mid: mid, DisplayName: buddy.DisplayName, PicturePath: buddy.PicturePath}
-		lc.contactCache[mid] = contact
+		lc.contactCache[mid] = cachedContact{Contact: contact, cachedAt: time.Now()}
 		return contact
 	}
 	if err != nil {
